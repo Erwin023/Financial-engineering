@@ -1,3 +1,3 @@
-# Valuation-and-analysis-european-and-american-option
+# Financial engineering
 
-Project completed in an Introduction to Financial Engineering course with a group of 3 students.
+Projects in courses related to financial engineering.
