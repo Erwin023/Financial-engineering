@@ -1,0 +1,621 @@
+---
+title: "Projekt opcje"
+author: "Erwin Jasic, Kamil Żeleźniak, Przemysław Adamski"
+date: "12 maja 2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, echo = FALSE)
+library(ggplot2)
+library(reshape2)
+library(tinytex)
+```
+
+### Wstęp
+
+W tym projekcie zajmiemy się wyceną opcji europejskich i amerykańskich oraz ich analizą. Zakładamy dwumianowy model rynku, gdzie akcja warta w chwili $t$ $S_t$ w kolejnej chwili może być warta $u \cdot S_t$ lub $d \cdot S_t$, gdzie u i d są dane. Zakładamy, że akcja nie wypłaca dywidend. Poza akcjami, dysponujemy również możliwością inwestycji ze stałą stopą wolną od ryzyka $r$ (risk free rate) w każdym okresie z oprocentowaniem ciągłym. Będziemy się zajmowali dokładnie czterema rodzajami opcji:
+\begin{itemize}
+  \item Opcja europejska call z ceną wykonania $K$ i zapadalnością $T$ lat,
+  \item Opcja europejska put z ceną wykonania $K$ i zapadalnością $T$ lat,
+  \item Opcja amerykańska call z ceną wykonania $K$ i zapadalnością $T$ lat,
+  \item Opcja amerykańska put z ceną wykonania $K$ i zapadalnością $T$ lat.
+\end{itemize}
+
+Na początek obliczymy cenę każdej z wyżej wymienionych opcji dla konkretnych danych, które pojawiły się w treści projketu:
+\begin{itemize}
+  \item $\Delta t = \frac{1}{12}$, $T = 2$
+  \item $u = e^{\sigma \sqrt{\Delta t}}$, $d = e^{-\sigma \sqrt{\Delta t}}$,
+  \item $r = 0.02$, $\sigma = 0.3$,
+  \item $S_0 = 50$, $K = 48$.
+\end{itemize}
+
+
+### Zadanie 1
+
+Dla opcji europejskich call i put przedstawmy proste podejście do obliczania ich ceny, które nie działa niestety przy opcjach amerykańskich, a mianowicie możemy dosłownie wyprowadzić na nią wzór. Mianowicie jest to dosłownie wartość oczekiwana payoffu tej akcji, czyli musimy policzyć prawdopodobieństwo (w świecie risk-neutral) każdej możliwej wartości końcowej tej akcji, a następnie przemnożyć je przez payoff w danym scenariuszu, wysumować po wszystkich możliwych scenariuszach, a następnie zdyskontować na chwilę 0. Łatwo widać, że prawdopodobieństwo rozkłada się tam względem rozkładu dwumianowego (gdy sukces, akcja idzie w górę, gdy porażka akcja idzie w dół). $$c = e^{-rT} \sum_{j=0}^n \frac{n!}{(n-j)!j!} p^j (1-p)^{n-j} \max (S_0 u^j d^{n-j} - K, \mbox{ } 0)$$
+
+Wynik dla opcji europejskiej call@K:
+
+```{r}
+EOP_call <- function(S0,r,K,Time,dt,sigma){
+  
+  u <- exp(sigma*sqrt(dt))
+  d <- exp(-sigma*sqrt(dt))
+  n <- Time/dt
+  p <- (exp(r*dt)-d)/(u-d)
+  
+  Suma <- 0
+  
+  for(j in 0:n){
+    Suma <- Suma + choose(n,j)*p^j*(1-p)^(n-j)*max(S0*u^j*d^(n-j)-K,0)      
+  }
+  
+  return(exp(-r*Time)*Suma)
+}
+
+EOP_call(50,0.02,48,2,1/12,0.3)
+
+```
+
+Wynik dla opcji europejskiej put@K:
+
+```{r}
+EOP_put <- function(S0,r,K,Time,dt,sigma){
+  
+  u <- exp(sigma*sqrt(dt))
+  d <- exp(-sigma*sqrt(dt))
+  n <- Time/dt
+  p <- (exp(r*dt)-d)/(u-d)
+  
+  Suma <- 0
+  
+  for(j in 0:n){
+    Suma <- Suma + choose(n,j)*p^j*(1-p)^(n-j)*max(K-S0*u^j*d^(n-j),0)      
+  }
+  
+  return(exp(-r*Time)*Suma)
+}
+
+EOP_put(50,0.02,48,2,1/12,0.3)
+```
+
+### Zadanie 2
+
+Problem pojawia się, gdy chcemy policzyć cenę opcji amerykańskiej w chwili 0. Nie istnieje na to jawny wzór, ponieważ możemy wykonać opcję w każdej chwili $t$. Nasze podejście do wyliczania tej ceny będzie następujące. Na początek będziemy tworzyć graf (chociaż będziemy go przedstawiać w postaci macierzy górnotrójkątnej i nazywać ją macierzą payoffów), który będzie wyliczał na podstawie naszych parametrów payoffy każdego ze scenariuszy (to jest czy akcja pójdzie w górę kilka razy czy w dół itp.). 
+Do tego posłuży nam funkcja Graf, która zwraca nam macierz, która po kilku prostych przekształceniach staje się dokładnie tym czym chcemy, czyli macierzą reprezentującą graf payoffu w każdej z sytuacji które rozpatrujemy. Nas jednak nie interesują same payoffy, a wartość opcji w danym momencie, zatem tworzymy do tego w funkcji EOP_tree dodatkową macierz (Cofanie), która będzie nam mówiła dokładnie to co chcemy. 
+Skupiając się na ostatniej kolumnie, daje nam ona payoff akcji po 2 latach, zatem patrząc na to jak na świat risk-neutral możemy w takim razie łatwo obliczyć wartość oczekiwaną payoffu wszystkich możliwych sytuacji miesiąc wcześniej ($\Delta t = \frac{1}{12}$), ponieważ wartość oczekiwana payoffu musi zostać taka sama (z pominięciem dyskontowania). Dokładnie to robi funkcja Vertex_Value: znając wartości oczekiwane payoffów w dwóch "następnych" wierzchołkach, oblicza wartość oczekiwaną w wierzchołku, którym się zajmujemy.
+Zatem idąc od prawej do lewej, możemy obliczyć wartość oczekiwaną payoffu naszej opcji w czasie 0, co nam daje bezarbitrażową cenę tej akcji.  
+  
+Różnica pomiędzy opcjami amerykańskimi a europejskimi w implementacji tego podejścia jest tylko taka, że gdy tworzymy macierz Cofanie, to przy opcjach amerykańskich musimy się zastanowić, czy bardziej nam się opłaca trzymać dalej tę opcję, czy ją wykonać, czyli matematycznie: czy wartość oczekiwana tego ile warta będzie za miesiąc ta opcja (po zdyskontowaniu na chwilę obecną) jest większa, niż opcja jest warta teraz. Opcje amerykańskie wtedy biorą oczywiście te bardziej korzystną czynność, a opcje europejskie tego wyboru nie mają. Ponieważ nas interesuje wartość oczekiwana tej opcji w czasie 0, musimy teraz tylko odczytać pierwszy wyraz tej macierzy, ponieważ to on ją reprezentuje.  
+  
+
+```{r}
+Graf <- function(u,d,n=25){
+  A<-matrix(0,n,n)
+  for(i in 1:n){
+    for(j in i:n){
+      A[i,j]<-u^(j-i)*d^(i-1)
+    }
+  }
+  return(A)
+}
+
+Vertex_Value <- function(p,r,dt,Cu,Cd){
+  return(exp(-r*dt)*(p*Cu+(1-p)*Cd))
+}
+
+EOP_tree <- function(S0=50,r=0.02,K=48,Time=2,dt=1/12,sigma=0.3, call=1, EU=1){
+  
+  u <- exp(sigma*sqrt(dt))
+  d <- exp(-sigma*sqrt(dt))
+  n <- Time/dt+1
+  p <- (exp(r*dt)-d)/(u-d)
+
+  graph <- (Graf(u,d,n) * S0 - K)*(-1)^(call + 1)
+  graph[graph < 0] <- 0
+  
+  Cofanie <- matrix(0,Time/dt+1,Time/dt+1)
+  Cofanie[,Time/dt+1] <- graph[,Time/dt+1]
+  
+  if (EU == 1) {
+    for(j in (Time/dt+1):2){
+      for(k in 1:(j-1)){
+        Cofanie[k,j-1] <- Vertex_Value(p,r,dt,Cofanie[k,j],Cofanie[k+1,j])
+      }
+    }
+  }
+  else {
+    for(j in (Time/dt+1):2){
+      for(k in 1:(j-1)){
+        Cofanie[k,j-1] <- max(Vertex_Value(p,r,dt,Cofanie[k,j],Cofanie[k+1,j]), graph[k,j-1])
+      }
+    }
+  }
+  
+  
+  return(Cofanie[1,1])
+  
+}
+```
+
+Wyniki dla danych z treści projektu (kolejno EU_call, EU_put, AM_call, AM_put):
+
+```{r}
+EOP_tree(call=1, EU=1) #call eu
+EOP_tree(call=0, EU=1) #put eu
+EOP_tree(call=1, EU=0) #call am
+EOP_tree(call=0, EU=0) #put am
+```
+
+Zauważmy, że dla tak dobranych danch wyniki między opcjami call i put różnią się znacząco, ale różnica między opcjami europejskimi, a amerykańskimi jest niewielka lub wcale nie występuje. (opcja europejska call i opcja amerykańska call są warte tyle samo w chwili $0$) 
+
+
+Poniżej przedstawimy dlaczego koszt opcji amerykańskich (niewypłacających dywidend) jest równy kosztowi opcji europejskich, mimo że opcja amerykańska daje więcej możliwości, niż opcja europejska. Intuicyjnie, niezależnie od tego co się stanie z akcją (to jest czy pójdzie w dół czy w górę wcześniej), okazuje się, że bardziej opłaca się ją trzymać do ostatniej chwili. 
+
+Będziemy rozpatrywać naszą opcję w świecie risk-neutral. Rozważmy dwa scenariusze: wykonujemy opcję w
+chwili 0, lub nie wykonujemy i obliczamy wartość naszej opcji w chwili kolejnej, w tym przypadku weźmy
+$\Delta t>0$ oraz r > 0 dowolne. W pierwszym przypadku wykonanie akcji przyniesie
+nam zysk, który w chwili t = $\Delta t$ będzie warty $(S_0 − K)e^{r \Delta t}$
+.
+Z drugiej strony należy policzyć wartość oczekiwaną wartości tej opcji, gdy tej opcji nie wykonamy. W świecie
+risk-neutral prawdopodobieństwo $p$ jest specjalnie tak dobrane, żeby zachodziło $\mathbb{E}[S_t] = pS_0u+ (1−p)S_0d =
+S_0e^{r\Delta t}$. Należy jednak zauważyć, że wartość oczekiwana payoffu w czasie $\Delta t$ wynosi $max(0,p(S_0u-K))+max(0,(1-p)(S_0d-K))\geq \mathbb{E}[S_t]>(S_0 − K)e^{r \Delta t}$, zatem opcji amerykańskiej nie opłaca się wykonać przed czasem zapadalności, ponieważ wartość oczekiwana payoffu z każdą chwilą rośnie.
+
+
+Przeprowadźmy podobną analizę dla opcji amerykańskiej put. W każdym momencie możemy albo wykonać opcję, albo poczekać. Zauważmy, że w przypadku, gdy niezależnie czy akcja pójdzie w górę czy w dół, w kolejnym momencie payoff będzie dodatni, wtedy opłaca się wykonać opcję teraz. Jest tak dlatego, ponieważ w takim przypadku payoff zakumulowany na kolejna chwilę wynosi $e^{r\Delta t}(K-S_0)$, a jeśli poczekamy dłużej to wartość oczekiwana payoffu wyniesie $p(K-S_0 u)+(1-p)(K-S_0 d) = K-S_0e^{r\Delta t}$, czyli istotnie mniej. Dzięki temu możemy też zauważyć, że jeśli w danym momencie opcję opłaca się wykonać, to jeśli opcja pójdzie w dół w kolejnym momencie, to również opłaca się ją wykonać. Intuicyjnie wydaje się to jasne, ponieważ jako posiadacze tej opcji dokładnie na to liczymy, jednak można też to uzasadnić matematycznie. Mianowicie skoro opcja ta w poprzednim momencie była opłacalna do wykonania, to znaczy, że w szczególności miała dodatni payoff. W takim razie skoro akcja poszła w dół, to jeśli teraz pójdzie w górę, to wróci do stanu z ostatniego moementu, czyli jej payoff nadal będzie dodatni. To że jeśli akcja pójdzie w dół oznacza, że payoff będzie dodatni (nawet większy, niż obecnie) jest oczywiste, zatem skoro oba kolejne payoffy są dodatnie, to teraz opłaca się na pewno wykonać opcję. Nie jest to jednak równoważność - zdarza się często tak, że mimo, że jeden z możliwych kolejnych payffów jest zerem (co zawyża w takim przypadku wartość oczekiwaną payoffu w następnej chwili, bo skoro $payoff = max(K-S_t,0)$, to gdy ten payoff wynosi on 0 oznacza to, że $K-S_t\leq0$, więc obliczając wartość oczekiwaną zawyżamy ją biorąc zamiast ujemnej wartości 0).
+
+### Zadanie 3  
+  
+Teraz zobaczymy jak zmiana jednego parametru wpływa na wartość poszczególnch opcji w chwili $0$. (Analiza wrażliwości ceny opcji)
+
+```{r}
+#test dla K
+
+vector_K <- seq(40, 60, 1)
+
+values_K_eu_call <- sapply(vector_K, EOP_tree, S0=50,r=0.02,dt=1/12,Time=2,sigma=0.3, call=1, EU=1)
+values_K_eu_put <- sapply(vector_K, EOP_tree, S0=50,r=0.02,dt=1/12,Time=2,sigma=0.3, call=0, EU=1)
+values_K_usa_call <- sapply(vector_K, EOP_tree, S0=50,r=0.02,dt=1/12,Time=2,sigma=0.3, call=1, EU=0)
+values_K_usa_put <- sapply(vector_K, EOP_tree, S0=50,r=0.02,dt=1/12,Time=2,sigma=0.3, call=0, EU=0)
+
+
+plot(vector_K, values_K_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab='K', ylab='Cena', main='Cena opcji w zaleznosci od ceny wykonania K', ylim = c(0,17))
+lines(vector_K, values_K_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_K, values_K_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(39.8,11, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+```
+
+Na powyższym wykresie widzimy, że wraz ze wzrostem $K$ cena opcji call maleje, a cena opcji put rośnie. 
+Wynika to z faktu, że jeśli mamy opcję put, to mamy większa szansę na duży payoff. Odwrotnie jest w przypadku opcji call.
+Można też spojrzeć na wzór na payoff w opcji call i put. W tej pierwszej mamy $\max(S_T - K, 0)$, więc im większe $K$, tym oczekujemy mniejszego payoffu. 
+Dla opcji put jest odwrotnie. Mianowicie ze wzoru $\max(K - S_T, 0)$ wynika, że im większa $K$ tym większy payoff.
+
+
+```{r}
+#test dla T
+
+vector_T <- seq(1, 50, 1)
+
+values_T_eu_call <- sapply(vector_T, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,sigma=0.3, call=1, EU=1)
+values_T_eu_put <- sapply(vector_T, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,sigma=0.3, call=0, EU=1)
+values_T_usa_call <- sapply(vector_T, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,sigma=0.3, call=1, EU=0)
+values_T_usa_put <- sapply(vector_T, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,sigma=0.3, call=0, EU=0)
+
+
+
+plot(vector_T, values_T_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab='T', ylab='Cena', main='Cena opcji w zaleznosci od zapadalnosci T', ylim = c(0,50))
+lines(vector_T, values_T_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_T, values_T_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(0.4,50, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+```
+
+Wykres przedstawia ceny opcji call i put w zależności od zapadalności $T$. Widzimy, że wraz ze wzrostem $T$ cena opcji call rośnie. Wynika to z tego, że zawsze opłaca się czekać z wykonaniem opcji call (pokazaliśmy to wcześniej), więc im dłużej możemy czekać, tym więcej zarobimy stąd cena takiej opcji rośnie. Natomiast cena opcji europejskiej put na początku rośnie, bo mamy większą szanse na zarobek, ale później maleje wraz ze wzrostem $T$, ponieważ payoff tej opcji jest ograniczony przez $K$. Dodatkowo na niekorzyść tej opcji działa coś co nazywamy zmianą wartości pieniądza w czasie. Cena opcji amerykańskiej put nie będzie malała, ponieważ możemy w każej chwili reagować. Możemy o tym pomyśleć w ten sposób, że mamy im większe $T$, tym większe pole manewru daje nam taka opcja, więc nie będzie jej cena maleć. 
+
+
+```{r}
+
+#test dla S0
+
+vector_S0 <- seq(10, 100, 2)
+
+values_S0_eu_call <- sapply(vector_S0, EOP_tree, Time=2,r=0.02,dt=1/12,K=48,sigma=0.3, call=1, EU=1)
+values_S0_eu_put <- sapply(vector_S0, EOP_tree, Time=2,r=0.02,dt=1/12,K=48,sigma=0.3, call=0, EU=1)
+values_S0_usa_call <- sapply(vector_S0, EOP_tree, Time=2,r=0.02,dt=1/12,K=48,sigma=0.3, call=1, EU=0)
+values_S0_usa_put <- sapply(vector_S0, EOP_tree, Time=2,r=0.02,dt=1/12,K=48,sigma=0.3, call=0, EU=0)
+
+
+
+plot(vector_S0, values_S0_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab='spot', ylab='Cena', main='Cena opcji w zaleznosci od poczatkowej ceny spot', ylim = c(0,65))
+lines(vector_S0, values_S0_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_S0, values_S0_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(10,64, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+```
+
+Analiza tego wykresu sprowadza się do podobnych wniosków co przy pierwszym wykresie (dla parametru $K$), tylko odwrotnie (intuicja i wzór na payoff). Czyli, jeśli $S_0$ rośnie to rośnie cena opcji call, a cena opcji put maleje.
+
+
+```{r}
+#test dla sigma
+
+vector_sigma <- seq(0.05, 2, 0.05)
+
+values_sigma_eu_call <- sapply(vector_sigma, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,Time=2, call=1, EU=1)
+values_sigma_eu_put <- sapply(vector_sigma, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,Time=2, call=0, EU=1)
+values_sigma_usa_call <- sapply(vector_sigma, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,Time=2, call=1, EU=0)
+values_sigma_usa_put <- sapply(vector_sigma, EOP_tree, S0=50,r=0.02,dt=1/12,K=48,Time=2, call=0, EU=0)
+
+
+plot(vector_sigma, values_sigma_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab=expression(paste(sigma)), ylab='Cena', main=expression(paste('Cena opcji w zaleznosci od parametru ', sigma)), ylim = c(0,50))
+lines(vector_sigma, values_sigma_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_sigma, values_sigma_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(0.05,50, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+```
+
+Z powyższego wykresu jesteśmy w stanie wywnioskować, że parametr $\sigma$ powoduje wzrost cen zarówno opcji call jak i put (amerykańskiej oraz europejskiej).
+
+
+```{r}
+#test dla r
+
+vector_r <- seq(0.01, 0.2, 0.01)
+
+values_r_eu_call <- sapply(vector_r, EOP_tree, S0=50,Time=2,dt=1/12,K=48,sigma=0.3, call=1, EU=1)
+values_r_eu_put <- sapply(vector_r, EOP_tree, S0=50,Time=2,dt=1/12,K=48,sigma=0.3, call=0, EU=1)
+values_r_usa_call <- sapply(vector_r, EOP_tree, S0=50,Time=2.05,dt=1/12,K=48,sigma=0.3, call=1, EU=0)
+values_r_usa_put <- sapply(vector_r, EOP_tree, S0=50,Time=2,dt=1/12,K=48,sigma=0.3, call=0, EU=0)
+
+
+
+plot(vector_r, values_r_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab='r', ylab='Cena', main='Cena opcji w zaleznosci od stopy wolnej od ryzyka r', ylim = c(0,22))
+lines(vector_r, values_r_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_r, values_r_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(0.008,22, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+```
+
+Aby uargumentować zachowanie widoczne na powyższym wykresie, trzeba zwrócić uwagę na wzór parametru p symbolizującego prawdopodobieństwo w naszym zagadnieniu. Zauważamy w nim, że zwiększanie wartości r powoduje przyrost prawdopodobieństwa na wzrost ceny akcji oraz zmniejszenie prawdopodobieństwa jej spadku. W tej perspektywie rozumiemy już otrzymane zachowanie cen. Skoro z większą szansą cena akcji będzie wyższa to naturalnie również opcja do zakupu (po cenie która raczej będzie niższa) powinna być droższa. Tak samo w drugą stronę cena opcji put będzie malała, skoro będzie dawała nam możliwość sprzedania akcji za cenę prawdopodobniej niższą niż na rynku.
+
+```{r}
+#test dla dt
+
+vector_dt <- c(1/1460,1/730,1/365,1/200,1/168,1/144,1/120,1/96,1/72,1/60,1/48,1/32,1/24,1/16,1/12,1/8,1/6,1/4,1/2,1)
+
+values_dt_eu_call <- sapply(vector_dt, EOP_tree, S0=50,r=0.02,K=48,Time=2,sigma=0.3, call=1, EU=1)
+values_dt_eu_put <- sapply(vector_dt, EOP_tree, S0=50,r=0.02,K=48,Time=2,sigma=0.3, call=0, EU=1)
+values_dt_usa_call <- sapply(vector_dt, EOP_tree, S0=50,r=0.02,K=48,Time=2,sigma=0.3, call=1, EU=0)
+values_dt_usa_put <- sapply(vector_dt, EOP_tree, S0=50,r=0.02,K=48,Time=2,sigma=0.3, call=0, EU=0)
+
+
+
+plot(vector_dt, values_dt_eu_call, type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, xlab=expression(paste(Delta, 't (skala logarytmiczna)')), ylab='Cena', main=expression(paste('Cena opcji w zaleznosci od ', Delta, 't')), ylim = c(5,11), log = "x")
+lines(vector_dt, values_dt_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1)
+lines(vector_dt, values_dt_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1)
+
+par(xpd = TRUE)
+
+legend(0.0006,9.1, c("EU/AM call", "EU put", "AM put"), pch = c(1,2,4), col = c(3,2,4), lty = 1, bg = "white", pt.bg = "white", cex = 1, lwd = 2)
+
+grid <- matrix(c(1,1,2,3) , ncol=2, nrow=2, byrow = T)
+layout(grid)
+
+plot(vector_dt, values_dt_eu_call, xlab=expression(paste(Delta, 't (skala logarytmiczna)')), ylab='Cena',type = "o", col = 3, pch = 1, lty = 1, lwd = 2, cex = 1, main=expression(paste('Cena EU/AM call w zaleznosci od ', Delta, 't')), log = "x")
+plot(vector_dt, values_dt_eu_put, type = "o", col = 2, pch = 2, lty = 1, lwd = 2, cex = 1, xlab=expression(paste(Delta, 't (skala logarytmiczna)')), ylab='Cena', main=expression(paste('Cena EU put w zaleznosci od ', Delta, 't')), log = "x")
+plot(vector_dt, values_dt_usa_put, type = "o", col = 4, pch = 4, lty = 1, lwd = 2, cex = 1, xlab=expression(paste(Delta, 't (skala logarytmiczna)')), ylab='Cena', main=expression(paste('Cena AM put w zaleznosci od ', Delta, 't')), log = "x")
+
+```
+
+
+Czasy $\Delta t$, dla których liczymy wartości opcji zostały dobrane w taki sposób, żeby odpowiadały pewnym naturalnym dla nas okresom, na przykład $\Delta t = 1/365$ odpowiada jednemu dniowi, ponieważ $T=2$ odpowiada 2 latom. Jak widzimy, dla dużych $\Delta t$, czyli wartości większych, niż $0.25$ (która oznacza, że czas pomiędzy każdą zmianą ceny wynosi $0.25$ roku, czyli $3$ miesiące) cena opcji wynosi jest niższa, niż gdy $\Delta t$ jest mniejsze. Jednak kiedy $\Delta t \rightarrow 0$ cena opcji stabilizuje się, co indukuje istnienie granicy (oczywiście nie jest to w pełni rygorystyczny dowód matematyczny, tylko obserwacja na podstawie danych). Jednak to co jest dosyć zaskakujące to to, że dla $\Delta t$ wielkości około $\frac{1}{10}$ wyniki są już bardzo zbliżone do wyników dla $\Delta t$ rzędu $\frac{1}{1000}$, co jest dla nas świetną wiadomością, ponieważ oznacza, że nie musimy wykonywać tak wielu obliczeń.
+
+
+
+
+### Zadanie 4
+
+W celu obliczenia optymalnych momentów wykonania opcji amerykańskich definiujemy funkcję Worth_American. Jako argumenty będzie ona przyjmowała wszelkie parametry potrzebne do zdefiniowania opcji amerykańskiej, natomiast zwracanym wynikiem będzie macierz zero-jedynkowa, symbolizująca jedynkami momenty w których warto opcję wykonać. Przebieg funkcji jest bliźniaczy do wykonywania funkcji EOP_tree podczas liczenia ceny opcji amerykańskich. Główną różnicą jest utworzenie (początkowo zerowej) macierzy „Worth”, która będzie fundamentem pod naszą odpowiedź, po czym przypisywanie jedynek w momentach, które okażą się optymalne. Konkretnie, zaczynamy od sprawdzenia opłacalności wykonania opcji w ostatnim momencie i nadpisujemy ostatnią kolumnę. Następnie korzystamy z przebiegu procesu obliczania ceny. To znaczy obliczając wartość opcji w wierzchołku podczas wyliczania ceny, porównywaliśmy zdyskontowaną wartość oczekiwaną następnych wierzchołków z payoffem wykonania opcji w aktualnym wierzchołku  i przypisywaliśmy mu większą z tych dwóch wartości. Jeśli większą okazuje się payoff wykonania to moment ten uznajemy za optymalny i w odpowiadającym mu miejscu w macierzy przypisujemy wartość 1. Tak postępując na samym końcu otrzymamy macierz która nas interesowała, po czym zwracamy ją jako wynik.
+
+
+```{r}
+#Opłacalność wykonania opcji amerykańskiej
+Worth_American <- function(S0=50,r=0.02,K=48,Time=2,dt=1/12,sigma=0.3, call=1){
+  
+  u <- exp(sigma*sqrt(dt))
+  d <- exp(-sigma*sqrt(dt))
+  n <- Time/dt+1
+  p <- (exp(r*dt)-d)/(u-d)
+  
+  graph <- (Graf(u,d,n) * S0 - K)*(-1)^(call + 1)
+  graph[graph < 0] <- 0
+  
+  Cofanie <- matrix(0,n,n)
+  Cofanie[,n] <- graph[,n]
+  
+  Worth <- matrix(0,n,n)
+  Worth[,n] <- (graph[,n]>0)
+  
+  #wiemy że opcję call opłaca sie wykonać tylko na końcu
+  #Dlatego wystarczy spojrzeć na kolumne ostatnich momentów
+  if(call == 1){
+    return(Worth)
+  }
+  
+  for(j in n:2){
+    for(k in 1:(j-1)){
+      v1 <- Vertex_Value(p,r,dt,Cofanie[k,j],Cofanie[k+1,j])
+      v2 <- graph[k,j-1]
+      Cofanie[k,j-1] <- max(v1,v2)
+      if(v2>v1){
+        Worth[k,j-1] <- 1
+      }
+    }
+  }
+  
+  return(Worth)
+}
+worth_call <- Worth_American(call=1)
+worth_put <- Worth_American(call=0)
+
+
+n <- sqrt(length(worth_put))
+macierz_put <- matrix(rep(NA, n^2), n, n)
+macierz_call <- matrix(rep(NA, n^2), n, n)
+#macierz_na
+
+for (i in 1:n){
+  for (j in 1:i){
+    macierz_put[n-i+j,i] <- worth_put[j,i]
+    macierz_call[n-i+j,i] <- worth_call[j,i]
+  }
+}
+#macierz_put[1:25,25] <- NA
+#macierz_put
+
+X1 <- melt(macierz_put, na.rm = TRUE)
+colnames(X1)[3] <- "momenty_oplacalnosci"
+X1$Var3 <- n-X1$Var1
+ggplot(X1, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=momenty_oplacalnosci), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Oplacalnosc AM put") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+Na początek powiemy, jak czytać powyższy wykres i poniższe podobne do niego wykresy. W lewym dolnym rogu znajduje się chwila zero i jej jedyny wierzchołek, następnie idąc w prawo mamy na myśli, że cena akcji maleje w kolejnym momencie, natomiast idąc w prawo i w górę w jednym ruchu oznaczamy, że cena akcji rośnie. Dla wykresów o momentach wykonania przez jasnoniebieskie punkty oznaczamy, że opcję oznacza się wykonać, a przez ciemnoniebieskie, że nie warto.
+Dla opcji amerykańskiej put powyższy wykres pokazuje momenty, w których warto jest wykonać opcję, na którym to widzimy dokładnie to, co nasza wcześniejsza analiza sugerowała, to jest jeśli cena akcji pójdzie wystarczająco w dół, opcję opłaca się wykonać, a jeśli opłacało się przed chwilą i cena akcji zmalała jeszcze bardziej, to nadal (wręcz tym bardziej) opłaca się ją wykonać. Stąd dolna część powyższego wykresu jest całkowicie jasna.
+
+```{r}
+X2 <- melt(macierz_call, na.rm = TRUE)
+colnames(X2)[3] <- "momenty_oplacalnosci"
+X2$Var3 <- n-X2$Var1
+ggplot(X2, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=momenty_oplacalnosci), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Oplacalnosc AM call") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+Dla opcji amerykańskiej call oczywiście jedyne momenty wykonania będą na samym końcu, to jest w czasie zapadalności i tam, gdzie payoff jest dodatni.
+
+
+### Zadanie 5
+
+W tym zadaniu zajmiemy się zbadaniem portfela zabezpieczającego w węzłach drzewa dla każdej opcji. Portfel taki składa się z pewnej liczby akcji (u nas delta_akcji) oraz z pewnej ilości gotówki/pożyczki (u nas alpha_gotówki). W każdym wierzchołku skłąd takiego portfela się różni (trzeba za każdym razem, dla każdego wierzchołka osobno policzyć jaki będzie skład portfela zabezpieczającego). Taki portfel tworzymy w celu zabezpieczania się na rózne scenariusze rynkowe. 
+
+Sposób wyliczenia takiego portfela nie jest skomplikowany. Z poprzednich zadań wiemy jak wyliczyć drzewo wartości opcji w każdym grafie (u nas macierz Cofanie) oraz mamy też funkcję Graf, która oblicza nam wartości w kolejnych wierzchołkach w zależności od róznych scenariuszy (akcja idzie w dół lub w górę). Jeśli mamy już te dwie macierze to możemy policzyć to co chcemy. Wzory otrzymujemy poprzez proste układy równań z dwiema niewiadomymi (delta_akcji, alpha_gotówki) w świecie risk-free. Następnie takie rozumowanie przeprowadzamy w każdym z wierzchołków i z tego otrzymujemy drzewo (u nas macierz M) portfeli zabezpieczających w każdym wierzchołku poza ostatnimi momentami (tam już nie ma czego zabezpieczać). Warto zwrócić uwagę, że portfel zabezpieczający tworzymi tylko wtedy kiedy mamy do czynienia z opcją call (tzn. wtedy kiedy my sprzedajemy komuś prawo do opcji).
+
+
+
+
+```{r}
+delta_akcji <- function(Vb, Vc, Stb, Stc) {
+  return((Vb - Vc)/(Stb - Stc))
+}
+
+alpha_gotowki <- function(delta_akcji, Stc, r, dt) {
+  return(-delta_akcji * Stc * exp(-r * dt))
+}
+
+
+portfel <- function(S0=20, dt=3/12, Time=1/2, K=21, r=0.12, sigma=0.3, EU=1, call=1, akcje=1) {
+  
+  u <- exp(sigma*sqrt(dt))
+  d <- exp(-sigma*sqrt(dt))
+  #u = 1.1
+  #d = 0.9
+  n <- Time/dt+1
+  p <- (exp(r*dt)-d)/(u-d)
+  
+  macierz <- Graf(u, d, n) * S0
+  
+  graph <- (Graf(u, d, n) * S0 - K)*(-1)^(call + 1)
+  graph[graph < 0] <- 0
+  
+  Cofanie <- matrix(0,Time/dt+1,Time/dt+1)
+  Cofanie[,Time/dt+1] <- graph[,Time/dt+1]
+  
+  M_akcje <- matrix(0, n, n)
+  M_gotowki <- matrix(0, n, n)
+  if (EU == 1) {
+    for(j in n:2){
+      for(k in 1:(j-1)){
+        Cofanie[k,j-1] <- Vertex_Value(p,r,dt,Cofanie[k,j],Cofanie[k+1,j])
+        M_akcje[k,j-1] <- delta_akcji(Cofanie[k,j], Cofanie[k+1,j], macierz[k,j], macierz[k+1,j]) 
+        M_gotowki[k,j-1] <- alpha_gotowki(delta_akcji(Cofanie[k,j], Cofanie[k+1,j], macierz[k,j], macierz[k+1,j]), macierz[k+1,j], r, dt)
+      }
+    }
+  }
+  else {
+    for(j in n:2){
+      for(k in 1:(j-1)){
+        Cofanie[k,j-1] <- max(Vertex_Value(p,r,dt,Cofanie[k,j],Cofanie[k+1,j]), graph[k,j-1])
+        M_akcje[k,j-1] <- delta_akcji(Cofanie[k,j], Cofanie[k+1,j], macierz[k,j], macierz[k+1,j])
+        M_gotowki[k,j-1] <- alpha_gotowki(delta_akcji(Cofanie[k,j], Cofanie[k+1,j], macierz[k,j], macierz[k+1,j]), macierz[k+1,j], r, dt)
+      }
+    }
+  }
+  if(akcje == 1){
+    return(M_akcje)
+  }
+  else {
+    return(M_gotowki)
+  }
+  
+}
+akcje <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 1, 1, 1)
+gotowka <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 1, 1, 2)
+
+n <- sqrt(length(akcje))
+macierz_akcje <- matrix(rep(NA, n^2), n, n)
+macierz_gotowka <- matrix(rep(NA, n^2), n, n)
+#macierz_na
+
+for (i in 1:n){
+  for (j in 1:i){
+    macierz_akcje[n-i+j,i] <- akcje[j,i]
+    macierz_gotowka[n-i+j,i] <- gotowka[j,i]
+  }
+}
+macierz_akcje[1:25,25] <- NA
+macierz_gotowka[1:25,25] <- NA
+
+
+X <- melt(macierz_akcje, na.rm = TRUE)
+colnames(X)[3] <- "delta_akcji"
+X$Var3 <- n-X$Var1
+ggplot(X, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=delta_akcji), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla opcji call") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+#X
+```
+
+Widzimy, że dla opcji call, jeśli akcja idzie w górę to w naszym portfelu zabezpieczającym opłaca się ją mieć, a jak w dół to odwrotnie.
+
+```{r}
+Y <- melt(macierz_gotowka, na.rm = TRUE)
+colnames(Y)[3] <- "alpha_gotowki"
+Y$Var3 <- n-Y$Var1
+ggplot(Y, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=alpha_gotowki), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla opcji call") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Podobne zachowanie możemy zauważyć dla gotówki. Jeśli akcja idzie w górę to pozbywamy się gotówki (zapożyczamy się na rzecz akcji), a jak w dół to nie.
+
+
+
+```{r}
+
+
+
+akcje <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 1, 0, 1)
+gotowka <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 1, 0, 2)
+
+n <- sqrt(length(akcje))
+macierz_akcje <- matrix(rep(NA, n^2), n, n)
+macierz_gotowka <- matrix(rep(NA, n^2), n, n)
+#macierz_na
+
+for (i in 1:n){
+  for (j in 1:i){
+    macierz_akcje[n-i+j,i] <- akcje[j,i]
+    macierz_gotowka[n-i+j,i] <- gotowka[j,i]
+  }
+}
+macierz_akcje[1:25,25] <- NA
+macierz_gotowka[1:25,25] <- NA
+#akcje
+
+
+
+X <- melt(macierz_akcje, na.rm = TRUE)
+colnames(X)[3] <- "delta_akcji"
+X$Var3 <- n-X$Var1
+ggplot(X, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=delta_akcji), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla EU opcji put") +
+  theme(plot.title = element_text(hjust = 0.5))
+#X
+```
+
+Zgodnie z wyrobioną intuicją, dla opcji put będzie odwrotnie. Jeśli akcja idzie w górę to chcemy się jej pozbyć, a jak w dół to jej po prostu nie kupujemy.
+
+```{r}
+Y <- melt(macierz_gotowka, na.rm = TRUE)
+colnames(Y)[3] <- "alpha_gotowki"
+Y$Var3 <- n-Y$Var1
+ggplot(Y, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=alpha_gotowki), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla EU opcji put") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Analogicznie, widzimy, że dla europejskiej opcji put jeśli akcja idzie w górę to chcemy mieć gotówkę, a jak akcja idzie w dół to nie.
+
+
+
+```{r}
+
+
+akcje <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 0, 0, 1)
+gotowka <- portfel(50, 1/12, 2, 48, 0.02, 0.3, 0, 0, 2)
+
+n <- sqrt(length(akcje))
+macierz_akcje <- matrix(rep(NA, n^2), n, n)
+macierz_gotowka <- matrix(rep(NA, n^2), n, n)
+#macierz_na
+
+for (i in 1:n){
+  for (j in 1:i){
+    macierz_akcje[n-i+j,i] <- akcje[j,i]
+    macierz_gotowka[n-i+j,i] <- gotowka[j,i]
+  }
+}
+macierz_akcje[1:25,25] <- NA
+macierz_gotowka[1:25,25] <- NA
+#akcje
+
+
+
+X <- melt(macierz_akcje, na.rm = TRUE)
+colnames(X)[3] <- "delta_akcji"
+X$Var3 <- n-X$Var1
+ggplot(X, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=delta_akcji), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla AM opcji put") +
+  theme(plot.title = element_text(hjust = 0.5))
+#X
+
+Y <- melt(macierz_gotowka, na.rm = TRUE)
+colnames(Y)[3] <- "alpha_gotowki"
+Y$Var3 <- n-Y$Var1
+ggplot(Y, aes(x = Var2, y = Var3)) + 
+  geom_point(aes(col=alpha_gotowki), size=6) +
+  xlab("chwila") + ylab("ilosc wzrostow ceny") +
+  ggtitle("Portfel zabezpieczajacy dla AM opcji put") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+Dla amerykańskiej opcji put jest podobnie jak dla europejskiej. Jeśli akcja idzie w górę to się jej pozbywamy i mamy gotówkę.
